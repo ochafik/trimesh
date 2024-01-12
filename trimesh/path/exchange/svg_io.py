@@ -479,7 +479,7 @@ def _entities_to_str(entities, vertices, name=None, digits=None, only_layers=Non
         return result
 
     # tuples of (metadata, path string)
-    pairs = []
+    data = []
 
     for entity in entities:
         if only_layers is not None and entity.layer not in only_layers:
@@ -494,8 +494,11 @@ def _entities_to_str(entities, vertices, name=None, digits=None, only_layers=Non
         meta = deepcopy(entity.metadata)
         if name is not None:
             meta["name"] = name
-        pairs.append((meta, path_string))
-    return pairs
+        color_attrib = ""
+        if entity.color is not None:
+            color_attrib = f' fill="rgb({entity.color[0]}, {entity.color[1]}, {entity.color[2]})" fill-opacity="{entity.color[3] / 255.0}"'
+        data.append((meta, path_string, color_attrib))
+    return data
 
 
 def export_svg(drawing, return_path=False, only_layers=None, digits=None, **kwargs):
@@ -522,14 +525,14 @@ def export_svg(drawing, return_path=False, only_layers=None, digits=None, **kwar
     attribs = {"class": type(drawing).__name__}
 
     if util.is_instance_named(drawing, "Scene"):
-        pairs = []
+        data = []
         geom_meta = {}
         for name, geom in drawing.geometry.items():
             if not util.is_instance_named(geom, "Path2D"):
                 continue
             geom_meta[name] = geom.metadata
             # a pair of (metadata, path string)
-            pairs.extend(
+            data.extend(
                 _entities_to_str(
                     entities=geom.entities,
                     vertices=geom.vertices,
@@ -543,7 +546,7 @@ def export_svg(drawing, return_path=False, only_layers=None, digits=None, **kwar
             # polluting the file with a ton of loose attribs
             attribs["metadata_geometry"] = _encode(geom_meta)
     elif util.is_instance_named(drawing, "Path2D"):
-        pairs = _entities_to_str(
+        data = _entities_to_str(
             entities=drawing.entities,
             vertices=drawing.vertices,
             digits=digits,
@@ -561,9 +564,9 @@ def export_svg(drawing, return_path=False, only_layers=None, digits=None, **kwar
     template_svg = resources.get("templates/base.svg")
 
     elements = []
-    for meta, path_string in pairs:
+    for meta, path_string, color_attrib in data:
         # create a simple path element
-        elements.append(f'<path d="{path_string}" {_format_attrib(meta)}/>')
+        elements.append(f'<path d="{path_string}" {_format_attrib(meta)}{color_attrib}/>')
 
     # format as XML
     if "stroke_width" in kwargs:
