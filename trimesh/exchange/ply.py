@@ -153,8 +153,8 @@ def _add_attributes_to_dtype(dtype, attributes):
             dtype.append((name, data.dtype))
         else:
             attribute_dtype = data.dtype if len(data.dtype) == 0 else data.dtype[0]
-            dtype.append((f"{name}_count", "u1"))
-            dtype.append((name, _numpy_type_to_ply_type(attribute_dtype), data.shape[1]))
+            dtype.append((f"{name}_count", "<u1"))
+            dtype.append((name, attribute_dtype, data.shape[1]))
     return dtype
 
 
@@ -266,7 +266,11 @@ def export_ply(
     if include_attributes:
         if hasattr(mesh, "vertex_attributes"):
             # make sure to export texture coordinates as well
-            if hasattr(mesh, "visual") and hasattr(mesh.visual, "uv"):
+            if (
+                hasattr(mesh, "visual")
+                and hasattr(mesh.visual, "uv")
+                and np.shape(mesh.visual.uv) == (len(mesh.vertices), 2)
+            ):
                 mesh.vertex_attributes["s"] = mesh.visual.uv[:, 0]
                 mesh.vertex_attributes["t"] = mesh.visual.uv[:, 1]
             _assert_attributes_valid(mesh.vertex_attributes)
@@ -281,7 +285,7 @@ def export_ply(
     dtype_color = ("rgba", "<u1", (4))
 
     # get template strings in dict
-    templates = resources.get("templates/ply.json", decode_json=True)
+    templates = resources.get_json("templates/ply.json")
     # start collecting elements into a string for the header
     header = [templates["intro"]]
 
@@ -342,27 +346,35 @@ def export_ply(
             _add_attributes_to_data_array(faces, mesh.face_attributes)
 
     header.append(templates["outro"])
-    export = Template("".join(header)).substitute(header_params).encode("utf-8")
+    export = [Template("".join(header)).substitute(header_params).encode("utf-8")]
 
     if encoding == "binary_little_endian":
         if hasattr(mesh, "vertices"):
-            export += vertex.tobytes()
+            export.append(vertex.tobytes())
         if hasattr(mesh, "faces"):
-            export += faces.tobytes()
+            export.append(faces.tobytes())
     elif encoding == "ascii":
-        export_data = util.structured_array_to_string(
-            vertex, col_delim=" ", row_delim="\n"
+        export.append(
+            util.structured_array_to_string(vertex, col_delim=" ", row_delim="\n").encode(
+                "utf-8"
+            ),
         )
+
         if hasattr(mesh, "faces"):
-            export_data += "\n"
-            export_data += util.structured_array_to_string(
-                faces, col_delim=" ", row_delim="\n"
+            export.extend(
+                [
+                    b"\n",
+                    util.structured_array_to_string(
+                        faces, col_delim=" ", row_delim="\n"
+                    ).encode("utf-8"),
+                ]
             )
-        export += export_data.encode("utf-8")
+        export.append(b"\n")
+
     else:
         raise ValueError("encoding must be ascii or binary!")
 
-    return export
+    return b"".join(export)
 
 
 def _parse_header(file_obj):

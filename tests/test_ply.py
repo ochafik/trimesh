@@ -16,10 +16,10 @@ class PlyTest(g.unittest.TestCase):
         m = g.get_mesh("machinist.XAML")
 
         assert m.visual.kind == "face"
-        assert m.visual.face_colors.ptp(axis=0).max() > 0
+        assert g.np.ptp(m.visual.face_colors, axis=0).max() > 0
 
         export = m.export(file_type="ply")
-        reconstructed = g.wrapload(export, file_type="ply")
+        reconstructed = g.roundtrip(export, file_type="ply")
 
         assert reconstructed.visual.kind == "face"
 
@@ -28,10 +28,10 @@ class PlyTest(g.unittest.TestCase):
         m = g.get_mesh("reference.ply")
 
         assert m.visual.kind == "vertex"
-        assert m.visual.vertex_colors.ptp(axis=0).max() > 0
+        assert g.np.ptp(m.visual.vertex_colors, axis=0).max() > 0
 
         export = m.export(file_type="ply")
-        reconstructed = g.wrapload(export, file_type="ply")
+        reconstructed = g.roundtrip(export, file_type="ply")
         assert reconstructed.visual.kind == "vertex"
 
         assert g.np.allclose(reconstructed.visual.vertex_colors, m.visual.vertex_colors)
@@ -90,7 +90,7 @@ class PlyTest(g.unittest.TestCase):
         m.vertex_attributes["test_nd_attribute"] = test_nd_attribute
 
         export = m.export(file_type="ply")
-        reconstructed = g.wrapload(export, file_type="ply")
+        reconstructed = g.roundtrip(export, file_type="ply")
 
         vertex_attributes = reconstructed.metadata["_ply_raw"]["vertex"]["data"]
         result_1d = vertex_attributes["test_1d_attribute"]
@@ -103,24 +103,32 @@ class PlyTest(g.unittest.TestCase):
         # Test writing face attributes to a ply, by reading
         # them back and asserting the written attributes array matches
 
-        m = g.get_mesh("box.STL")
-        test_1d_attribute = g.np.copy(m.face_angles[:, 0])
-        test_nd_attribute = g.np.copy(m.face_angles)
-        m.face_attributes["test_1d_attribute"] = test_1d_attribute
-        m.face_attributes["test_nd_attribute"] = test_nd_attribute
+        for encoding in ["binary", "ascii"]:
+            for dt in [g.np.float32, g.np.float64]:
+                m = g.get_mesh("box.STL")
+                test_1d_attribute = g.np.copy(m.face_angles[:, 0])
+                test_nd_attribute = g.np.copy(m.face_angles)
+                m.face_attributes["test_1d_attribute"] = test_1d_attribute.astype(dt)
+                m.face_attributes["test_nd_attribute"] = test_nd_attribute.astype(dt)
 
-        export = m.export(file_type="ply")
-        reconstructed = g.wrapload(export, file_type="ply")
+                export = m.export(
+                    file_type="ply", include_attributes=True, encoding=encoding
+                )
+                reconstructed = g.roundtrip(export, file_type="ply", process=False)
 
-        face_attributes = reconstructed.metadata["_ply_raw"]["face"]["data"]
-        result_1d = face_attributes["test_1d_attribute"]
-        result_nd = face_attributes["test_nd_attribute"]["f1"]
+                face_attributes = reconstructed.metadata["_ply_raw"]["face"]["data"]
+                result_1d = face_attributes["test_1d_attribute"]
+                if encoding == "binary":
+                    # only binary format allows this
+                    result_nd = face_attributes["test_nd_attribute"]["f1"]
+                else:
+                    result_nd = face_attributes["test_nd_attribute"]
 
-        g.np.testing.assert_almost_equal(result_1d, test_1d_attribute)
-        g.np.testing.assert_almost_equal(result_nd, test_nd_attribute)
+                g.np.testing.assert_almost_equal(result_1d, test_1d_attribute)
+                g.np.testing.assert_almost_equal(result_nd, test_nd_attribute)
 
-        no_attr = m.export(file_type="ply", include_attributes=False)
-        assert len(no_attr) < len(export)
+                no_attr = m.export(file_type="ply", include_attributes=False)
+                assert len(no_attr) < len(export)
 
     def test_cases(self):
         a = g.get_mesh("featuretype.STL")
@@ -133,19 +141,19 @@ class PlyTest(g.unittest.TestCase):
 
     def test_ascii_color(self):
         mesh = g.trimesh.creation.box()
-        en = g.wrapload(mesh.export(file_type="ply", encoding="ascii"), file_type="ply")
+        en = g.roundtrip(mesh.export(file_type="ply", encoding="ascii"), file_type="ply")
         assert en.visual.kind is None
 
         color = [255, 0, 0, 255]
         mesh.visual.vertex_colors = color
 
         # try exporting and reloading raw
-        eb = g.wrapload(mesh.export(file_type="ply"), file_type="ply")
+        eb = g.roundtrip(mesh.export(file_type="ply"), file_type="ply")
 
         assert g.np.allclose(eb.visual.vertex_colors[0], color)
         assert eb.visual.kind == "vertex"
 
-        ea = g.wrapload(mesh.export(file_type="ply", encoding="ascii"), file_type="ply")
+        ea = g.roundtrip(mesh.export(file_type="ply", encoding="ascii"), file_type="ply")
         assert g.np.allclose(ea.visual.vertex_colors, color)
         assert ea.visual.kind == "vertex"
 
@@ -171,7 +179,7 @@ class PlyTest(g.unittest.TestCase):
             elif "points" in empty_file:
                 # create export
                 export = e.export(file_type="ply")
-                reconstructed = g.wrapload(export, file_type="ply")
+                reconstructed = g.roundtrip(export, file_type="ply")
 
                 # result should be a point cloud instance
                 assert isinstance(e, g.trimesh.PointCloud)

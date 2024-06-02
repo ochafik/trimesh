@@ -433,7 +433,7 @@ class GLTFTest(g.unittest.TestCase):
         )
         assert len(reloaded.geometry) == 1
         # get meshes back
-        sphere_b = list(reloaded.geometry.values())[0]
+        sphere_b = next(iter(reloaded.geometry.values()))
         assert (sphere_b.visual.material.baseColorFactor == (255, 0, 0, 255)).all()
 
     def test_material_hash(self):
@@ -771,7 +771,7 @@ class GLTFTest(g.unittest.TestCase):
         )
         # original mesh should have vertex colors
         assert m.visual.kind == "face"
-        assert m.visual.vertex_colors.ptp(axis=0).ptp() > 0
+        assert g.np.ptp(g.np.ptp(m.visual.vertex_colors, axis=0)) > 0
         # vertex colors should have survived import-export
         assert g.np.allclose(m.visual.vertex_colors, r.visual.vertex_colors)
 
@@ -1011,13 +1011,62 @@ class GLTFTest(g.unittest.TestCase):
             g.os.chdir(cwd)
 
         with g.TemporaryDirectory() as d:
-            # now try it without chaging to that directory
+            # now try it without changing to that directory
             full = g.os.path.join(d, "hi", "there", "different", "levels")
             path = g.os.path.join(full, "hey.gltf")
             g.os.makedirs(full)
             g.trimesh.creation.box().export(path)
             r = g.trimesh.load(path)
             assert g.np.isclose(r.volume, 1.0)
+
+    def test_postprocess(self):
+        # check to see if keys we expect exist
+        s = g.get_mesh("cycloidal.3DXML")
+
+        def post(tree):
+            # should have exported meshes here
+            assert len(tree["meshes"]) == len(s.geometry)
+            # should have buffers
+            assert len(tree["buffers"]) >= 1
+
+        # export with a postprocessor
+        s.export(file_type="glb", tree_postprocessor=post)
+
+    def test_unitize_normals_null_values(self):
+        # Create the mesh
+        mesh = g.trimesh.Trimesh(
+            vertices=[[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0], [0, 0, 1], [1, 0, 1]],
+            faces=[[0, 1, 2], [1, 3, 2], [0, 1, 4]],
+        )
+
+        # Set the normal of the first vertex to null
+        modified_normals = mesh.vertex_normals.copy()
+        modified_normals[0] = [0, 0, 0]
+
+        mesh.vertex_normals = modified_normals
+
+        # Export the mesh
+        export = mesh.export(file_type="glb", unitize_normals=True)
+        reimported_mesh = next(
+            iter(
+                g.trimesh.load(
+                    g.trimesh.util.wrap_as_stream(export), file_type="glb"
+                ).geometry.values()
+            )
+        )
+
+        # Check that the normals are still null
+        assert g.np.allclose(reimported_mesh.vertex_normals[0], [0, 0, 0])
+
+    def test_no_indices(self):
+        # test mesh with no indices (faces should be generated correctly)
+        mesh = g.get_mesh("no_indices_3storybuilding.glb")
+        assert len(mesh.triangles) == 72
+
+        # the mesh is actually mode 5 with 4 vertices
+        # which as triangle strips would be 2 faces
+        mesh = g.get_mesh("Mesh_PrimitiveMode_04.gltf")
+        assert len(mesh.triangles) == 2
 
 
 if __name__ == "__main__":

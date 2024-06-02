@@ -2,6 +2,7 @@ import numpy as np
 
 from ..constants import log
 from ..exceptions import ExceptionWrapper
+from ..typed import ArrayLike, Number, Optional
 
 try:
     from PIL.Image import Image, fromarray
@@ -11,13 +12,13 @@ except BaseException as E:
 
 
 def specular_to_pbr(
-    specularFactor=None,
-    glossinessFactor=None,
-    specularGlossinessTexture=None,
-    diffuseTexture=None,
-    diffuseFactor=None,
+    specularFactor: Optional[ArrayLike] = None,
+    glossinessFactor: Optional[Number] = None,
+    specularGlossinessTexture: Optional["Image"] = None,
+    diffuseTexture: Optional["Image"] = None,
+    diffuseFactor: Optional[ArrayLike] = None,
     **kwargs,
-):
+) -> dict:
     """
     Convert the KHR_materials_pbrSpecularGlossiness to a
     metallicRoughness visual.
@@ -175,10 +176,14 @@ def specular_to_pbr(
             specularGlossinessTexture = np.array(specularGlossinessTexture) / 255.0
             specularTexture, glossinessTexture = None, None
 
-            if (
-                len(specularGlossinessTexture.shape) == 2
-                or specularGlossinessTexture.shape[-1]
-            ) == 1:
+            if len(specularGlossinessTexture.shape) == 2:
+                # use the one channel as a multiplier for specular and glossiness
+                specularTexture = glossinessTexture = specularGlossinessTexture.reshape(
+                    specularGlossinessTexture.shape[0],
+                    specularGlossinessTexture.shape[1],
+                    1,
+                )
+            elif specularGlossinessTexture.shape[-1] == 1:
                 # use the one channel as a multiplier for specular and glossiness
                 specularTexture = glossinessTexture = specularGlossinessTexture[
                     ..., np.newaxis
@@ -299,7 +304,7 @@ def specular_to_pbr(
         metallic = np.array(metallic, dtype=np.float32)
 
     diffuse_rgb = diffuse[..., :3]
-    opacity = diffuse[..., -1] if diffuse.shape[-1] == 4 else None
+
     base_color_from_diffuse = diffuse_rgb * (
         one_minus_specular_strength
         / (1.0 - dielectric_specular[0])
@@ -312,8 +317,29 @@ def specular_to_pbr(
     base_color = mm * base_color_from_specular + (1.0 - mm) * base_color_from_diffuse
     base_color = np.clip(base_color, 0.0, 1.0)
 
-    if opacity is not None and np.any(opacity < 1.0):
-        base_color = np.concatenate([base_color, opacity[..., None]], axis=-1)
+    # get opacity
+    try:
+        if diffuse.shape == (4,):
+            # opacity is a single scalar value
+            opacity = diffuse[-1]
+            if base_color.shape == (3,):
+                # simple case with one color and diffuse with opacity
+                # add on the opacity from the diffuse color
+                base_color = np.append(base_color, opacity)
+            elif len(base_color.shape) == 3:
+                # stack opacity to match the base color array
+                dim = base_color.shape
+                base_color = np.dstack(
+                    (
+                        base_color,
+                        np.full(np.prod(dim[:2]), opacity).reshape((dim[0], dim[1], 1)),
+                    )
+                )
+        elif diffuse.shape[-1] == 4:
+            opacity = diffuse[..., -1]
+            base_color = np.concatenate([base_color, opacity[..., None]], axis=-1)
+    except BaseException:
+        log.error("unable to get opacity", exc_info=True)
 
     result = {}
     if len(base_color.shape) > 1:

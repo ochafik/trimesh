@@ -19,9 +19,12 @@ In [25]: %timeit xxh3_64_intdigest(d)
 3.37 us +/- 116 ns per loop
 ```
 """
+
 import os
+import sys
 import time
 from functools import wraps
+from hashlib import sha256 as _sha256
 
 import numpy as np
 
@@ -34,22 +37,17 @@ except BaseException:
     from collections.abc import Mapping
 
 
-# sha256 is always available
-from hashlib import sha256 as _sha256
-
-
-def sha256(item):
+def sha256(item) -> int:
     return int(_sha256(item).hexdigest(), 16)
 
 
-try:
+if sys.version_info >= (3, 9):
     # blake2b is available on Python 3 and
     from hashlib import blake2b as _blake2b
 
     def hash_fallback(item):
-        return int(_blake2b(item).hexdigest(), 16)
-
-except BaseException:
+        return int(_blake2b(item, usedforsecurity=False).hexdigest(), 16)
+else:
     # fallback to sha256
     hash_fallback = sha256
 
@@ -188,13 +186,13 @@ class TrackedArray(np.ndarray):
         if isinstance(obj, type(self)):
             obj._dirty_hash = True
 
-    def __array_wrap__(self, out_arr, context=None):
+    def __array_wrap__(self, out_arr, context=None, *args, **kwargs):
         """
         Return a numpy scalar if array is 0d.
         See https://github.com/numpy/numpy/issues/5819
         """
         if out_arr.ndim:
-            return np.ndarray.__array_wrap__(self, out_arr, context)
+            return np.ndarray.__array_wrap__(self, out_arr, context, *args, **kwargs)
         # Match numpy's behavior and return a numpy dtype scalar
         return out_arr[()]
 
@@ -656,7 +654,7 @@ class DataStore(Mapping):
                 # will raise if this is not a hashable type
                 hash(data)
             except BaseException:
-                raise ValueError("unhashable `{key}:{type(data)}`")
+                raise ValueError(f"unhashable `{key}:{type(data)}`")
             tracked = data
 
         # apply our mutability setting

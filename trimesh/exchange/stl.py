@@ -149,19 +149,44 @@ def load_stl_ascii(file_obj):
     ----------
     loaded : dict
       kwargs for a Trimesh constructor with keys:
-      vertices:     (n,3) float, vertices
-      faces:        (m,3) int, indexes of vertices
-      face_normals: (m,3) float, normal vector of each face
+      vertices:     (n, 3) float, vertices
+      faces:        (m, 3) int, indexes of vertices
+      face_normals: (m, 3) float, normal vector of each face
     """
 
     # read all text into one string
-    raw = util.decode_text(file_obj.read()).strip().lower()
+    raw_mixed = util.decode_text(file_obj.read()).strip()
+    # convert to lower case for solids and name capture
+    raw_lower = raw_mixed.lower()
 
-    # split into solid body
+    # collect the keyword arguments for the Trimesh constructor
     kwargs = {}
-    solids = raw.split("endsolid")
-    for solid in solids:
-        # get just the vertices
+
+    # keep track of our position in the file
+    position = 0
+
+    # use a for loop to avoid any possibility of infinite looping
+    for _ in range(len(raw_mixed)):
+        # find the start of the solid chunk
+        solid_start = raw_lower.find("solid", position)
+        # find the end of the solid chunk
+        solid_end = raw_lower.find("endsolid", position)
+
+        # on the next loop we don't have to check the text we've consumed
+        position = solid_end + len("endsolid")
+
+        # delimiter wasn't found for a chunk so exit
+        if solid_end < 0 or solid_start < 0:
+            break
+
+        # end delimiter order is wrong so this file is very malformed
+        if solid_start > solid_end:
+            raise ValueError("`endsolid` precedes `solid`!")
+
+        # get the chunk of text with this particular solid
+        solid = raw_lower[solid_start:solid_end]
+
+        # extract the vertices
         vertex_text = solid.split("vertex")
         vertices = np.fromstring(
             " ".join(line[: line.find("\n")] for line in vertex_text[1:]),
@@ -192,25 +217,21 @@ def load_stl_ascii(file_obj):
             util.log.warning("failed to extract face_normals", exc_info=True)
 
         try:
-            # try to extract the name from the header
-            text = vertex_text[0]
-            # find the keyword for the header format:
-            #    `solid {name}`
-            index = text.find("solid")
-            if index < 0:
-                raise ValueError("missing `solid` keyword")
-            # clip to the first newline after the `solid`
-            name = text[index + 6 :].strip().split("\n", 1)[0].strip()
+            # Previously checked to make sure there was matching 'solid' for 'endsolid'
+            # the name is right after the `solid` keyword if it exists
+            name = raw_mixed[solid_start : solid_start + solid.find("\n")][6:].strip()
         except BaseException:
             # will be filled in by unique_name
             name = None
 
-        # make sure geometry has a unique name
+        # make sure geometry has a unique name for the scene
         name = util.unique_name(name, kwargs)
+        # save the constructor arguments
         kwargs[name] = {
             "vertices": vertices.reshape((-1, 3)),
             "face_normals": face_normals,
             "faces": faces,
+            "metadata": {"name": name},
         }
 
     if len(kwargs) == 1:
@@ -219,17 +240,19 @@ def load_stl_ascii(file_obj):
     return {"geometry": kwargs}
 
 
-def export_stl(mesh):
+def export_stl(mesh) -> bytes:
     """
     Convert a Trimesh object into a binary STL file.
 
     Parameters
     ---------
-    mesh: Trimesh object
+    mesh
+      Trimesh object to export.
 
     Returns
     ---------
-    export: bytes, representing mesh in binary STL form
+    export
+      Represents mesh in binary STL form
     """
     header = np.zeros(1, dtype=_stl_dtype_header)
     if hasattr(mesh, "faces"):
@@ -245,7 +268,7 @@ def export_stl(mesh):
     return export
 
 
-def export_stl_ascii(mesh):
+def export_stl_ascii(mesh) -> str:
     """
     Convert a Trimesh object into an ASCII STL file.
 
@@ -255,8 +278,8 @@ def export_stl_ascii(mesh):
 
     Returns
     ---------
-    export : str
-        Mesh represented as an ASCII STL file
+    export
+      Mesh represented as an ASCII STL file
     """
 
     # move all the data that's going into the STL file into one array
@@ -265,17 +288,28 @@ def export_stl_ascii(mesh):
     blob[:, 1:, :] = mesh.triangles
 
     # create a lengthy format string for the data section of the file
-    format_string = "facet normal {} {} {}\nouter loop\n"
-    format_string += "vertex {} {} {}\n" * 3
-    format_string += "endloop\nendfacet\n"
-    format_string *= len(mesh.faces)
+    formatter = (
+        "\n".join(
+            [
+                "facet normal {} {} {}",
+                "outer loop",
+                "vertex {} {} {}\nvertex {} {} {}\nvertex {} {} {}",
+                "endloop",
+                "endfacet",
+                "",
+            ]
+        )
+    ) * len(mesh.faces)
 
-    # concatenate the header, data, and footer
-    export = "solid \n"
-    export += format_string.format(*blob.reshape(-1))
-    export += "endsolid"
+    # try applying the name from metadata if it exists
+    name = mesh.metadata.get("name", "")
+    if not isinstance(name, str):
+        name = ""
+    if len(name) > 80 or "\n" in name:
+        name = ""
 
-    return export
+    # concatenate the header, data, and footer, and a new line
+    return "\n".join([f"solid {name}", formatter.format(*blob.reshape(-1)), "endsolid\n"])
 
 
 _stl_loaders = {"stl": load_stl, "stl_ascii": load_stl}

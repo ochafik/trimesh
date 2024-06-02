@@ -97,6 +97,10 @@ def fix_inversion(mesh, multibody=False):
     multibody : bool
       If True will try to fix normals on every body
     """
+    if not mesh.is_watertight:
+        # this will make things worse for non-watertight meshes
+        return
+
     if multibody:
         groups = graph.connected_components(mesh.face_adjacency)
         # escape early for single body
@@ -435,7 +439,7 @@ def stitch(mesh, faces=None, insert_vertices=False):
         if not valid.any():
             continue
         # take the first valid normal from our new faces
-        check = check[valid][0]
+        check = check[0]
 
         # if our new faces are reversed from the original
         # Adjacent face flip them along their axis

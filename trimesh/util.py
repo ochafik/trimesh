@@ -17,8 +17,10 @@ import json
 import logging
 import random
 import shutil
+import sys
 import time
 import uuid
+import warnings
 import zipfile
 
 # for type checking
@@ -48,7 +50,7 @@ _IDENTITY = np.eye(4, dtype=np.float64)
 _IDENTITY.flags["WRITEABLE"] = False
 
 
-def has_module(name):
+def has_module(name: str) -> bool:
     """
     Check to see if a module is installed by name without
     actually importing the module.
@@ -63,28 +65,14 @@ def has_module(name):
     installed : bool
       True if module is installed
     """
-    # this should work on Python 2.7 and 3.4+
-    import pkgutil
+    if sys.version_info >= (3, 10):
+        # pkgutil was deprecated
+        from importlib.util import find_spec
+    else:
+        # this should work on Python 2.7 and 3.4+
+        from pkgutil import find_loader as find_spec
 
-    return pkgutil.find_loader(name) is not None
-
-
-try:
-    import rtree
-
-    # some versions of rtree screw up indexes on stream loading
-    # do a test here so we know if we are free to use stream loading
-    assert (
-        next(
-            rtree.index.Index(
-                [(1564, [0, 0, 0, 10, 10, 10], None)],
-                properties=rtree.index.Property(dimension=3),
-            ).intersection([1, 1, 1, 2, 2, 2])
-        )
-        == 1564
-    )
-except BaseException as E:
-    rtree = E
+    return find_spec(name) is not None
 
 
 def unitize(vectors, check_valid=False, threshold=None):
@@ -142,22 +130,18 @@ def unitize(vectors, check_valid=False, threshold=None):
     return unit
 
 
-def euclidean(a, b):
+def euclidean(a, b) -> float:
     """
-    Euclidean distance between vectors a and b.
-
-    Parameters
-    ------------
-    a : (n,) float
-       First vector
-    b : (n,) float
-       Second vector
-
-    Returns
-    ------------
-    distance : float
-        Euclidean distance between A and B
+    DEPRECATED: use `np.linalg.norm(a - b)` instead of this.
     """
+    warnings.warn(
+        "`trimesh.util.euclidean` is deprecated "
+        + "and will be removed in January 2025. "
+        + "replace with `np.linalg.norm(a - b)`",
+        category=DeprecationWarning,
+        stacklevel=2,
+    )
+
     a = np.asanyarray(a, dtype=np.float64)
     b = np.asanyarray(b, dtype=np.float64)
     return np.sqrt(((a - b) ** 2).sum())
@@ -199,7 +183,7 @@ def is_pathlib(obj):
     return hasattr(obj, "absolute") and name.endswith("Path")
 
 
-def is_string(obj):
+def is_string(obj) -> bool:
     """
     Check if an object is a string.
 
@@ -216,7 +200,7 @@ def is_string(obj):
     return isinstance(obj, str)
 
 
-def is_none(obj):
+def is_none(obj) -> bool:
     """
     Check to see if an object is None or not.
 
@@ -239,7 +223,7 @@ def is_none(obj):
     return False
 
 
-def is_sequence(obj):
+def is_sequence(obj) -> bool:
     """
     Check if an object is a sequence or not.
 
@@ -253,10 +237,8 @@ def is_sequence(obj):
     is_sequence : bool
         True if object is sequence
     """
-    seq = (
-        not hasattr(obj, "strip")
-        and hasattr(obj, "__getitem__")
-        or hasattr(obj, "__iter__")
+    seq = (not hasattr(obj, "strip") and hasattr(obj, "__getitem__")) or hasattr(
+        obj, "__iter__"
     )
 
     # check to make sure it is not a set, string, or dictionary
@@ -273,7 +255,7 @@ def is_sequence(obj):
     return seq
 
 
-def is_shape(obj, shape, allow_zeros=False):
+def is_shape(obj, shape, allow_zeros: bool = False) -> bool:
     """
     Compare the shape of a numpy.ndarray to a target shape,
     with any value less than zero being considered a wildcard
@@ -488,7 +470,7 @@ def vector_to_spherical(cartesian):
 
 def spherical_to_vector(spherical):
     """
-    Convert a set of (n, 2) spherical vectors to (n, 3) vectors
+    Convert an array of `(n, 2)` spherical angles to `(n, 3)` unit vectors.
 
     Parameters
     ------------
@@ -507,8 +489,7 @@ def spherical_to_vector(spherical):
     theta, phi = spherical.T
     st, ct = np.sin(theta), np.cos(theta)
     sp, cp = np.sin(phi), np.cos(phi)
-    vectors = np.column_stack((ct * sp, st * sp, cp))
-    return vectors
+    return np.column_stack((ct * sp, st * sp, cp))
 
 
 def pairwise(iterable):
@@ -833,7 +814,7 @@ def distance_to_end(file_obj):
     return distance
 
 
-def decimal_to_digits(decimal, min_digits=None):
+def decimal_to_digits(decimal, min_digits=None) -> int:
     """
     Return the number of digits to the first nonzero decimal.
 
@@ -850,7 +831,7 @@ def decimal_to_digits(decimal, min_digits=None):
     digits = abs(int(np.log10(decimal)))
     if min_digits is not None:
         digits = np.clip(digits, min_digits, 20)
-    return digits
+    return int(digits)
 
 
 def attach_to_log(
@@ -1460,16 +1441,24 @@ def concatenate(a, b=None):
             flat.extend(b)
         else:
             flat.append(b)
+    dump = []
+    for i in flat:
+        if is_instance_named(i, "Scene"):
+            dump.extend(i.dump())
+        else:
+            dump.append(i)
 
-    if len(flat) == 1:
+    if len(dump) == 1:
         # if there is only one mesh just return the first
-        return flat[0].copy()
-    elif len(flat) == 0:
-        # if there are no meshes return an empty list
-        return []
+        return dump[0].copy()
+    elif len(dump) == 0:
+        # if there are no meshes return an empty mesh
+        from .base import Trimesh
 
-    is_mesh = [f for f in flat if is_instance_named(f, "Trimesh")]
-    is_path = [f for f in flat if is_instance_named(f, "Path")]
+        return Trimesh()
+
+    is_mesh = [f for f in dump if is_instance_named(f, "Trimesh")]
+    is_path = [f for f in dump if is_instance_named(f, "Path")]
 
     if len(is_path) > len(is_mesh):
         from .path.util import concatenate as concatenate_path
@@ -1632,14 +1621,14 @@ def submesh(
         )
         for v, f, n, c in zip(vertices, faces, normals, visuals)
     ]
-    result = np.array(result)
+
     if only_watertight or repair:
         # fill_holes will attempt a repair and returns the
         # watertight status at the end of the repair attempt
-        watertight = np.array([i.fill_holes() and len(i.faces) >= 4 for i in result])
+        watertight = [i.fill_holes() and len(i.faces) >= 4 for i in result]
     if only_watertight:
         # remove unrepairable meshes
-        result = result[watertight]
+        return [i for i, w in zip(result, watertight) if w]
 
     return result
 
@@ -1765,6 +1754,8 @@ def bounds_tree(bounds):
     tree : Rtree
       Tree containing bounds by index
     """
+    import rtree
+
     # make sure we've copied bounds
     bounds = np.array(bounds, dtype=np.float64, copy=True)
     if len(bounds.shape) == 3:
@@ -2121,7 +2112,7 @@ def write_encoded(file_obj, stuff, encoding="utf-8"):
 
 def unique_id(length=12):
     """
-    Generate a random alphanumeric unique identifier
+    Generate a random alphaNumber unique identifier
     using UUID logic.
 
     Parameters
@@ -2132,7 +2123,7 @@ def unique_id(length=12):
     Returns
     ------------
     unique : str
-      Unique alphanumeric identifier
+      Unique alphaNumber identifier
     """
     return uuid.UUID(int=random.getrandbits(128), version=4).hex[:length]
 
@@ -2198,7 +2189,7 @@ def generate_basis(z, epsilon=1e-12):
     return result
 
 
-def isclose(a, b, atol):
+def isclose(a, b, atol: float = 1e-8):
     """
     A replacement for np.isclose that does fewer checks
     and validation and as a result is roughly 4x faster.
@@ -2221,12 +2212,10 @@ def isclose(a, b, atol):
       Per-element closeness
     """
     diff = a - b
-    close = np.logical_and(diff > -atol, diff < atol)
-
-    return close
+    return np.logical_and(diff > -atol, diff < atol)
 
 
-def allclose(a, b, atol=1e-8):
+def allclose(a, b, atol: float = 1e-8):
     """
     A replacement for np.allclose that does few checks
     and validation and as a result is faster.
@@ -2244,7 +2233,8 @@ def allclose(a, b, atol=1e-8):
     -----------
     bool indicating if all elements are within `atol`.
     """
-    return float((a - b).ptp()) < atol
+    #
+    return float(np.ptp(a - b)) < atol
 
 
 class FunctionRegistry(Mapping):
@@ -2268,9 +2258,9 @@ class FunctionRegistry(Mapping):
 
     def __setitem__(self, key, value):
         if not isinstance(key, str):
-            raise ValueError("key must be a string, got %s" % str(key))
+            raise ValueError(f"key must be a string, got {key!s}")
         if key in self:
-            raise KeyError("Cannot set new value to existing key %s" % key)
+            raise KeyError(f"Cannot set new value to existing key {key}")
         if not callable(value):
             raise ValueError("Cannot set value which is not callable.")
         self._dict[key] = value

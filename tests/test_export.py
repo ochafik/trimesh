@@ -16,7 +16,7 @@ class ExportTest(g.unittest.TestCase):
             if not isinstance(v, ExceptionWrapper)
         }
 
-        meshes = list(g.get_meshes(8))
+        meshes = list(g.get_meshes(10))
         # make sure we've got something with texture
         meshes.append(g.get_mesh("fuze.obj"))
 
@@ -36,6 +36,11 @@ class ExportTest(g.unittest.TestCase):
                         "No data exported %s to %s", mesh.metadata["file_name"], file_type
                     )
 
+                if mesh.visual.kind == "texture":
+                    c = mesh.copy()
+                    c.visual.uv = None
+                    c.export(file_type=file_type)
+
                 if file_type in [
                     "dae",  # collada, no native importers
                     "collada",  # collada, no native importers
@@ -46,6 +51,9 @@ class ExportTest(g.unittest.TestCase):
                     continue
 
                 g.log.info("Export/import testing on %s", mesh.metadata["file_name"])
+
+                if isinstance(export, str):
+                    assert export.endswith("\n"), f"{file_type} doesn't end with newline"
 
                 # if export is string or bytes wrap as pseudo file object
                 if isinstance(export, str) or isinstance(export, bytes):
@@ -180,6 +188,11 @@ class ExportTest(g.unittest.TestCase):
                     assert len(r.vertices) == len(mesh.vertices)
                     assert len(r.faces) == len(mesh.faces)
 
+                    if option.get("encoding", None) == "ascii":
+                        with open(temp.name) as f:
+                            exported = f.read()
+                        assert exported.endswith("\n")
+
                     # manual cleanup
                     g.os.remove(temp.name)
                     g.os.remove(temp_off.name)
@@ -187,7 +200,7 @@ class ExportTest(g.unittest.TestCase):
     def test_obj(self):
         m = g.get_mesh("textured_tetrahedron.obj", process=False)
         export = m.export(file_type="obj")
-        reconstructed = g.wrapload(export, file_type="obj", process=False)
+        reconstructed = g.roundtrip(export, file_type="obj", process=False)
         # test that we get at least the same number of normals and texcoords out;
         # the loader may reorder vertices, so we shouldn't check direct
         # equality
@@ -230,7 +243,7 @@ class ExportTest(g.unittest.TestCase):
         export = source.export(file_type="glb")
 
         # re- load the file as a trimesh.Scene object again
-        loaded = g.wrapload(export, file_type="glb")
+        loaded = g.roundtrip(export, file_type="glb")
 
         # the scene should be identical after export-> import cycle
         assert g.np.allclose(loaded.extents / source.extents, 1.0)
@@ -254,7 +267,7 @@ class ExportTest(g.unittest.TestCase):
         Test the magical trimesh.exchange.load.parse_file_args
         """
         # it's wordy
-        f = g.trimesh.exchange.load.parse_file_args
+        f = g.trimesh.exchange.load._parse_file_args
 
         RET_COUNT = 5
 
@@ -299,7 +312,7 @@ class ExportTest(g.unittest.TestCase):
 
     def test_buffered_random(self):
         """Test writing to non-standard file"""
-        mesh = list(g.get_meshes(1))[0]
+        mesh = next(iter(g.get_meshes(1)))
         with io.BufferedRandom(io.BytesIO()) as rw:
             mesh.export(rw, "STL")
             rw.seek(0)
